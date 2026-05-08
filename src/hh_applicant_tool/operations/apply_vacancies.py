@@ -134,7 +134,7 @@ class Operation(BaseOperation):
             "--system-prompt",
             "--ai-system",
             help="Системный промпт для AI генерации сопроводительных писем",
-            default="Напиши сопроводительное письмо для отклика на эту вакансию. Не используй placeholder'ы, твой ответ будет отправлен без обработки.",  # noqa: E501
+            default="Ты — опытный специалист, отправляющий персональный отклик на вакансию. \n\nТВОЯ ЛОГИКА:\n1. ТЫ — ЭТО `candidate`. Пиши только от первого лица. Тебе не нужно представляться в начале (твое имя и так привязано к отклику).\n2. ТВОЙ СТИЛЬ: Лаконичный, напористый, экспертный. Без «воды», без заискиваний и без шаблонных фраз («прошу рассмотреть», «буду полезен»). Пиши как профессионал, который ценит свое время и время нанимателя.\n3. ТВОЯ ЗАДАЧА: Продать решение проблемы, описанной в `job.description`, используя факты и метрики из твоего `candidate.experience_summary`.\n\nИНСТРУКЦИИ ПО ТЕКСТУ:\n- Начни сразу с сути: почему ты пишешь и какую конкретную проблему вакансии ты закроешь.\n- Используй только твердые данные (цифры, стек, результаты). Если в резюме написано «сократил на 70%», это должно быть в письме, но без «рекламного» пафоса.\n- НИКАКИХ ПОДПИСЕЙ И ФИНАЛЬНЫХ ФРАЗ: Не пиши «С уважением», не пиши свое имя в конце. Просто закончи предложением о готовности обсудить детали на встрече.\n- НИКАКИХ ПЛЕЙСХОЛДЕРОВ: В тексте не должно быть ничего в скобках [ ], никаких { } и пустых мест. Только готовый к отправке текст.\n\nФОРМАТ ОТВЕТА (JSON):\n{\n  \"strategy_note\": \"Суть мэтча в одно предложение\",\n  \"cover_letter\": \"Текст отклика\",\n  \"resume_focus\": \"На что давить в интервью\"\n}",  # noqa: E501
         )
         parser.add_argument(
             "--message-prompt",
@@ -530,21 +530,27 @@ class Operation(BaseOperation):
         return True
 
     def _parse_ai_json_response(self, response: str) -> bool | None:
-        response = response.strip().lower()
+        response = response.strip()
+        lower_resp = response.lower()
 
-        if response in ("да", "yes", "true"):
+        if lower_resp in ("да", "yes", "true"):
             return True
-        if response in ("нет", "no", "false"):
+        if lower_resp in ("нет", "no", "false"):
             return False
 
+        import json
         import re
 
-        from ..utils import json as utils_json
-
-        if response.startswith("```"):
-            response = re.sub(r"^```(?:json)?\s*", "", response)
-            response = re.sub(r"\s*```$", "", response)
-
+        clean_json = re.sub(r"```json\s*|\s*```", "", response, flags=re.IGNORECASE).strip()
+        
+        try:
+            data = json.loads(clean_json)
+            if isinstance(data, dict) and "suitable" in data:
+                return bool(data["suitable"])
+        except Exception as e:
+            logger.debug(f"JSON parse error: {e}. Raw response: {response}")
+            
+        # Fallback to regex if pure json parsing fails
         json_match = re.search(
             r'\{[^{}]*"suitable"\s*:\s*(true|false)[^{}]*\}',
             response,
@@ -552,7 +558,7 @@ class Operation(BaseOperation):
         )
         if json_match:
             try:
-                data = utils_json.loads(json_match.group(0))
+                data = json.loads(json_match.group(0))
                 return data.get("suitable")
             except Exception:
                 pass
@@ -584,29 +590,32 @@ class Operation(BaseOperation):
 
     def _build_filter_system_prompt_heavy(self, resume_analysis: str) -> str:
         return f"""
-Определи, подходит ли вакансия кандидату.
+Ты - HR-эксперт и карьерный консультант с 15-летним опытом IT-подбора.
+Твоя задача - объективно решить, подходит ли кандидат под данную вакансию.
 
-Смотри в первую очередь на тип работы (роль), а не на технологии.
+---
 
-Правила:
+#### ВХОДНЫЕ ДАННЫЕ (INPUT)
+Для анализа тебе предоставлены:
+1. [JOB] - Описание вакансии (стек, задачи, компания).
+2. [CANDIDATE] - Полные данные из резюме соискателя.
 
-1. Если работа по сути другая -> suitable = false
+#### ЗАДАНИЕ (TASK)
+1. Выдели из блока [CANDIDATE] ключевой технологический стек, профессиональную роль и главные достижения (ищи цифры, метрики, конкретные результаты).
+2. Проанализируй [JOB] и определи основные боли работодателя и требуемый уровень экспертности.
+3. Сравни эти данные. Решение "ПОДХОДИТ" (true) принимай только в том случае, если опыт и достижения кандидата позволяют эффективно решать задачи, описанные в [JOB].
 
-2. Если роль совпадает или очень близкая:
-   - есть пересечения по задачам или навыкам -> suitable = true
-   - даже частичное совпадение допустимо
+Принимай решение взвешенно, как при реальном найме на Senior/Lead позиции.
 
-3. Общие технологии сами по себе ничего не значат.
-   Если работа разная, это не делает вакансию подходящей.
+#### ВЫХОД (OUTPUT)
+Ответ СТРОГО в формате JSON:
+{{
+  "suitable": true,
+  "reason": "краткое профессиональное обоснование: какие именно навыки/достижения кандидата мэтчатся с задачами вакансии"
+}}
 
-4. Если данных мало:
-   - ориентируйся на название роли
-
-Не пиши объяснения.
-Ответ строго JSON:
-{{"suitable": true}} или {{"suitable": false}}
-
-Кандидат:
+---
+### [CANDIDATE DATA]
 {resume_analysis}
 """
 
@@ -743,9 +752,13 @@ class Operation(BaseOperation):
             resume["alternate_url"],
             resume["title"],
         )
+<<<<<<< HEAD
         print("🚀 Начинаю рассылку откликов для резюме:", resume["title"])
         applied_count = 0
         limit_reached = False
+=======
+        print("[START] Начинаю рассылку откликов для резюме:", resume["title"])
+>>>>>>> 9a335fc (feat: improve cover letter generation and handle vacancies with tests, update docker config)
 
         placeholders = {
             "first_name": user.get("first_name") or "",
@@ -760,16 +773,15 @@ class Operation(BaseOperation):
         do_apply = True
         storage = self.tool.storage
         site_emails = {}
+        resume_analysis = ""
 
         if self.ai_filter:
             if self.ai_filter == "heavy":
-                system_prompt = self._build_filter_system_prompt_heavy(
-                    self._analyze_resume_heavy(resume)
-                )
+                resume_analysis = self._analyze_resume_heavy(resume)
+                system_prompt = self._build_filter_system_prompt_heavy(resume_analysis)
             elif self.ai_filter == "light":
-                system_prompt = self._build_filter_system_prompt_light(
-                    self._analyze_resume_light(resume)
-                )
+                resume_analysis = self._analyze_resume_light(resume)
+                system_prompt = self._build_filter_system_prompt_light(resume_analysis)
             else:
                 raise ValueError(
                     f"Неизвестный режим AI фильтра: {self.ai_filter}"
@@ -886,7 +898,7 @@ class Operation(BaseOperation):
                             vacancy["alternate_url"],
                         )
                         print(
-                            "⏩ Вакансия уже отклонена ранее",
+                            ">> Вакансия уже отклонена ранее",
                             vacancy["alternate_url"],
                         )
                         continue
@@ -907,7 +919,7 @@ class Operation(BaseOperation):
                             vacancy["alternate_url"],
                         )
                         print(
-                            f"🧠 AI ({self.ai_filter}) посчитал неподходящей",
+                            f"[AI] ({self.ai_filter}) посчитал неподходящей",
                             vacancy["alternate_url"],
                         )
 
@@ -975,17 +987,37 @@ class Operation(BaseOperation):
                     "response_letter_required"
                 ):
                     if self.cover_letter_ai:
-                        msg = self.message_prompt + "\n\n"
-                        msg += (
-                            "Название вакансии: "
-                            + message_placeholders["vacancy_name"]
-                        )
-                        msg += (
-                            "Мое резюме: "
-                            + message_placeholders["resume_title"]
-                        )
-                        logger.debug("prompt: %s", msg)
-                        letter = self.cover_letter_ai.complete(msg)
+                        # Получаем полные данные вакансии для качественного письма
+                        full_vacancy_data = self.api_client.get(f"/vacancies/{vacancy['id']}")
+
+                        # Собираем контекст динамически (УНИВЕРСАЛЬНО)
+                        ai_context = {
+                            "job": {
+                                "title": vacancy.get("name"),
+                                "employer": (vacancy.get("employer") or {}).get("name"),
+                                "description": strip_tags(full_vacancy_data.get("description", "")) if full_vacancy_data else "",
+                                "key_skills": [s["name"] for s in full_vacancy_data.get("key_skills", [])] if full_vacancy_data else []
+                            },
+                            "candidate": {
+                                "first_name": message_placeholders.get("first_name", "Кандидат"),
+                                "last_name": message_placeholders.get("last_name", ""),
+                                "resume_title": resume.get("title"),
+                                "experience_summary": resume_analysis
+                            }
+                        }
+                        
+                        prompt_msg = f"Проанализируй данные и напиши сопроводительное письмо:\n{json.dumps(ai_context, ensure_ascii=False, indent=2)}"
+                        
+                        raw_response = self.cover_letter_ai.complete(prompt_msg)
+                        
+                        try:
+                            clean_json = re.sub(r"```json\s*|\s*```", "", raw_response).strip()
+                            letter_data = json.loads(clean_json)
+                            letter = letter_data.get("cover_letter", "")
+                            if not letter:
+                                letter = raw_response
+                        except Exception:
+                            letter = raw_response
                     else:
                         letter = (
                             rand_text(self.cover_letter) % message_placeholders
@@ -999,12 +1031,12 @@ class Operation(BaseOperation):
                 )
 
                 if vacancy.get("has_test"):
-                    logger.debug(
-                        "Решаем тест: %s",
-                        vacancy["alternate_url"],
-                    )
-
+                    test_link = vacancy.get("alternate_url")
+                    logger.info("Найдена вакансия с тестом: %s", test_link)
+                    
+                    # Записываем в отдельный файл для ручного прохождения
                     try:
+<<<<<<< HEAD
                         if not self.dry_run:
                             result = self._solve_vacancy_test(
                                 vacancy_id=vacancy["id"],
@@ -1035,6 +1067,20 @@ class Operation(BaseOperation):
                     except Exception as ex:
                         logger.error(f"Произошла непредвиденная ошибка: {ex}")
                         continue
+=======
+                        with open("vacancies_with_tests.txt", "a", encoding="utf-8") as f:
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            f.write(f"[{timestamp}] {vacancy.get('name')} - {employer.get('name')} - {test_link}\n")
+                    except Exception as e:
+                        logger.error(f"Не удалось записать вакансию с тестом в файл: {e}")
+
+                    print(f"[TEST] ТРЕБУЕТСЯ ТЕСТ (пройдите вручную): {test_link}")
+                    
+                    self._save_skipped_vacancy(
+                        vacancy, "has_test_manual_required", resume["id"]
+                    )
+                    continue
+>>>>>>> 9a335fc (feat: improve cover letter generation and handle vacancies with tests, update docker config)
 
                 else:
                     params = {
@@ -1052,7 +1098,7 @@ class Operation(BaseOperation):
                             assert res == {}
                             applied_count += 1
                             print(
-                                "📨 Отправили отклик на вакансию",
+                                " [APPLY] Отправили отклик на вакансию",
                                 vacancy["alternate_url"],
                             )
                     except Redirect:
@@ -1076,7 +1122,7 @@ class Operation(BaseOperation):
                                     assert res == {}
                                     applied_count += 1
                                     print(
-                                        "📨 Отправили отклик на вакансию после капчи",
+                                        " [APPLY] Отправили отклик на вакансию после капчи",
                                         vacancy["alternate_url"],
                                     )
                             else:
@@ -1113,7 +1159,7 @@ class Operation(BaseOperation):
                         try:
                             self._send_email(mail_to, mail_subject, mail_body)
                             print(
-                                "📧 Отправлено письмо на email по поводу вакансии",
+                                "[EMAIL] Отправлено письмо на email по поводу вакансии",
                                 vacancy["alternate_url"],
                             )
                         except Exception as ex:
@@ -1137,10 +1183,14 @@ class Operation(BaseOperation):
             resume["title"],
             applied_count,
         )
+<<<<<<< HEAD
         print(
             f"✅️ Закончили рассылку для резюме: {resume['title']}. Отправлено: {applied_count}"
         )
         return limit_reached
+=======
+        print("[DONE] Закончили рассылку откликов для резюме:", resume["title"])
+>>>>>>> 9a335fc (feat: improve cover letter generation and handle vacancies with tests, update docker config)
 
     def _send_email(self, to: str, subject: str, body: str) -> None:
         cfg = self.tool.config.get("smtp", {})

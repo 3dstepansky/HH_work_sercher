@@ -26,14 +26,20 @@ class Operation(BaseOperation):
     __aliases__ = ["update"]
 
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
-        pass
+        parser.add_argument("--search", help="Фильтр по названию резюме")
+        parser.add_argument("--id", help="Фильтр по ID резюме")
 
-    def run(self, tool: HHApplicantTool, args: BaseNamespace) -> None:
+    def run(self, tool: HHApplicantTool, args: Namespace) -> None:
         resumes: list[datatypes.Resume] = tool.get_resumes()
         # Там вызов API меняет поля
         tool.storage.resumes.save_batch(resumes)
 
         for resume in resumes:
+            if args.id and resume["id"] != args.id:
+                continue
+            if args.search and args.search.lower() not in resume["title"].lower():
+                continue
+
             if not resume.get("can_publish_or_update"):
                 logger.warning(f"Не могу обновить: {resume['alternate_url']}")
                 continue

@@ -23,14 +23,3 @@ services:
     container_name: stepansky_automation_hh
     environment:
       - HH_PROFILE_ID=stepansky
-      - RESUME_ID=3b52b973ff103b3d1c0039ed1f6c6b6c596b56
-      - SEARCH_QUERY="n8n" OR "AI" OR "ИИ" OR "LLM" OR "GPT" OR "нейросети" OR "prompt" OR "промпт" OR "автоматизац*"
-
-  nataly_automation_hh:
-    extends: hh_applicant_tool
-    container_name: nataly_automation_hh
-    environment:
-      - HH_PROFILE_ID=nataly
-      - RESUME_ID=4f9eb4ceff1063dd760039ed1f58494648676b
-      - SEARCH_QUERY="CEO OR COO OR Managing Director OR Executive"
-

@@ -96,8 +96,12 @@ class Operation(BaseOperation):
 
     def clear(self) -> None:
         blacklisted = set(self.tool.get_blacklisted())
-        for negotiation in self.tool.get_negotiations():
+        # Проверяем ВСЕ отклики, а не только активные
+        for negotiation in self.tool.get_negotiations(status="all"):
             vacancy = negotiation["vacancy"]
+            state_id = negotiation["state"]["id"]
+            
+            logger.debug(f"Проверка отклика {negotiation['id']}: state={state_id}")
 
             # Если работодателя блокируют, то он превращается в null
             # ХХ позволяет скрывать компанию, когда id нет, а вместо имени "Крупная российская компания"
@@ -119,10 +123,11 @@ class Operation(BaseOperation):
                 logger.debug(f"{days_passed = }")
                 if days_passed <= self.args.older_than:
                     continue
-            elif negotiation["state"]["id"] != "discard":
+            elif state_id not in ["discard", "refusal"]:
                 continue
 
             try:
+                print(f"🔍 Нашли отказ ({state_id}) для: {vacancy['name']}")
                 logger.debug(
                     "Пробуем отменить отклик на %s", vacancy["alternate_url"]
                 )

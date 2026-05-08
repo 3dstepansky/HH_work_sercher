@@ -9,17 +9,19 @@ SHELL=/bin/bash
 # Символ процента в кронтабе нужно экранировать
 # sleep с рандомной задержкой от 1 до 5 минут нужен во-первых чтобы токен обновиться успел, а во
 # вторых, чтобы антиспам не сработал
-0 */5 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
+# Подъем резюме (раз в 4 часа)
+7 */4 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -u -m hh_applicant_tool update-resumes --id "$RESUME_ID" >> /var/log/cron.log 2>&1
 
 # Рассылаем отклики
-0 8-21 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh_applicant_tool apply-vacancies -l /app/letter.txt -f --excluded-filter 'junior|стажировк|bitrix|ddd|web3|crypto|blockchain|дружн\\w+коллектив|полиграф|open\\s*space|опенспейс|хакатон|конкурс|тестов\\w+ задан|soft skill' >> /var/log/cron.log 2>&1
+0 8-21 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -u -m hh_applicant_tool apply-vacancies --resume-id "$RESUME_ID" --area 113 --search "$SEARCH_QUERY" -f --ai --ai-filter heavy >> /var/log/cron.log 2>&1
+45 * * * * /usr/local/bin/python -u -m hh_applicant_tool clear-negotiations -d >> /var/log/cron.log 2>&1
 
 # Тест: каждые 5 минут (задержка до 1 минуты, чтобы не накладывались)
-#*/5 * * * * /bin/bash -c 'sleep $((1 + RANDOM \% 59))' && /usr/local/bin/python -m hh_applicant_tool apply-vacancies >> /var/log/cron.log 2>&1
+#*/5 * * * * /bin/bash -c 'sleep $((1 + RANDOM \% 59))' && /usr/local/bin/python -u -m hh_applicant_tool apply-vacancies >> /var/log/cron.log 2>&1
 
 # Пытаемся обновить токен каждую минуту. В этом нет необходимости, можно закомментировать, так как
 # токен обновляется автоматически при любом запросе
-*/1 * * * * /usr/local/bin/python -m hh_applicant_tool refresh-token
+*/1 * * * * /usr/local/bin/python -u -m hh_applicant_tool refresh-token
 
 # Раскомментируй, если хочешь удалять чаты с отказами
 #0 */1 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh-applicant-tool clear-negotiations -d >> /var/log/cron.log 2>&1
